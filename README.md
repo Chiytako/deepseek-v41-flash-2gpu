@@ -18,8 +18,8 @@ OpenAI / Anthropic 互換の API プロキシ、量子化と校正の道具、�
 | 重みの大きさ | 334GB (48 shard)。うち Engram 表が約 200GB で、NVMe から必要な行だけ読む。GPU に載るのは experts と非 expert の層 |
 | 品質 (教師 = 1017 原重み、teacher-forced、top-32 上の KL) | エージェント要求 KL 0.158 (無校正 v0) → 0.059 (v1: Viterbi + scale refit) → **0.046** (v1-l2e: + L2 scale 校正)。top-1 一致 86.4% → 91.8% → **92.5%** |
 | 日本語 | 日本語回答 KL 0.206 → 0.074 → **0.060**、日本語の文章 (Wikipedia・青空文庫など 32 本) KL 0.139 → **0.120** (v1 → l2e) |
-| 中国語の混入 (中国語専用トークンの確率質量、教師比) | 日本語回答で 7.83 倍 (v0) → 2.20 倍 (v1) → **0.98 倍** (l2e) |
-| 画像 | 245 問の正答率 87.9% (v1) → **88.0%** (l2e)。画像 KL 0.251 (v0) → 0.132 → **0.121** |
+| 中国語の混入 (中国語専用トークンの確率質量、教師比) | 日本語回答で 7.83 倍 (v0) → 2.20 倍 (v1) → **0.98 倍** (l2e。1 倍 = 原重みと同程度) |
+| 画像 | 245 問の正答率 87.9% (v1) → **88.0%** (l2e。対の差 +0.1pt [−1.2, +1.4] で同等)。画像 KL 0.251 (v0) → 0.132 → **0.121** |
 | 生成速度 (ds41rt、思考込み、T=0.6) | 1 本 **116 tok/s**、16 本同時で合計 **413 tok/s** |
 | ds41rt 付属ベンチ (greedy、9 区分の加重) | **147.9 tok/s** (公表値 146.2 は 400W の 2x6000) |
 | prefill | 4,300〜4,800 tok/s (8K〜67K トークン、v1 で測定) |
@@ -139,8 +139,8 @@ an OpenAI/Anthropic-compatible API proxy, the quantization/calibration tooling, 
 |---|---|
 | Pack | 334 GB in 48 shards; routed experts in EXL3 2.0 bpw (K2, MCG codebook); non-expert layers and Engram tables byte-identical to the official 1017 checkpoint |
 | Quality vs. the 1017 original (teacher-forced KL over teacher top-32) | agent prompts 0.158 (uncalibrated) → 0.059 (Viterbi re-encode + scale refit) → **0.046** (+ L2 scale calibration); top-1 agreement 86.4% → 91.8% → **92.5%**; Japanese answers 0.206 → 0.074 → **0.060** |
-| Chinese leakage into Japanese answers (Chinese-only token mass, relative to teacher) | 7.83× → 2.20× → **0.98×** |
-| Vision | 245-question accuracy 87.9% → **88.0%** |
+| Chinese leakage into Japanese answers (Chinese-only token mass, relative to teacher) | 7.83× → 2.20× → **0.98×** (1.0× = same as the original) |
+| Vision | 245-question accuracy 87.9% → **88.0%** (paired difference +0.1 pt [−1.2, +1.4], i.e. unchanged) |
 | Decode (thinking on, T=0.6) | **116 tok/s** single stream, **413 tok/s** aggregate at 16 concurrent |
 | ds41rt release bench (greedy, weighted) | **147.9 tok/s** |
 | vs. vLLM + vllm-exl3 on the same weights | +45% at 16 concurrent, 2.3–2.7× prefill |
