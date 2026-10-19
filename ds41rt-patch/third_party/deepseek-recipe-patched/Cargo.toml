@@ -1,0 +1,12 @@
+# Test-only workspace for the vendored deepseek-recipe 0.1.0 crates (MIT,
+# DeepSeek), patched for numeric (1-100) reasoning effort. ds41rt consumes them
+# through [patch.crates-io] in rust/Cargo.toml; this workspace only lets
+# `cargo test --manifest-path third_party/deepseek-recipe-patched/Cargo.toml`
+# run their unit tests with their dev-dependencies.
+[workspace]
+resolver = "3"
+members = ["deepseek-recipe", "deepseek-recipe-core", "deepseek-recipe-encoding", "render-effort"]
+
+[patch.crates-io]
+deepseek-recipe-core = { path = "deepseek-recipe-core" }
+deepseek-recipe-encoding = { path = "deepseek-recipe-encoding" }

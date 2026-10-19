@@ -1,0 +1,20 @@
+--- a/run.sh
++++ b/run-local.sh
+@@ -465,7 +465,7 @@
+   args+=(--spark-tp "$spark_tp" --spark-ep "$spark_ep")
+ fi
+ [[ -z "$placement_directory" ]] || args+=(--placement-directory "$placement_directory")
+-docker run -d --name "$coordinator" --restart no --gpus "$gpu_request" --network host --ipc host --ulimit memlock=-1:-1 --device=/dev/infiniband \
++docker run -d --name "$coordinator" --restart no --gpus "$gpu_request" --network host --ipc host --ulimit memlock=-1:-1 \
+   -e "CUDA_VISIBLE_DEVICES=$gpu_uuid_csv" \
+   -e "DS41RT_RELEASE_CONFIG_SHA256=$fingerprint" -e "RUST_LOG=${RUST_LOG:-info}" \
+   "${rdma_env_args[@]}" \
+@@ -526,7 +526,7 @@
+ # (`rank`/`world`/`role`/`intermediate`) observable; without it EnvFilter is
+ # ERROR and the readiness line never reaches the container log. This adds no
+ # positional argument, so the worker argument contract is unchanged.
+-docker run -d --name "$name" --restart no --gpus all --network host --ipc host --ulimit memlock=-1:-1 --device=/dev/infiniband -e "DS41RT_RELEASE_CONFIG_SHA256=$fingerprint" -e "RUST_LOG=$rust_log" "${rdma_args[@]}" -v "$hf_home:/root/.cache/huggingface:ro" "$image" ds41rt expertd-native --snapshot "/root/.cache/huggingface/$snapshot_rel" --native-lib /opt/ds41rt/lib/libds41rt_native.so --rank "$rank" --world "$world" --capacity "$capacity" --device-budget-bytes "$budget" --first-layer "$first_layer" --listen "0.0.0.0:$port" "${topology_args[@]}" >/dev/null
++docker run -d --name "$name" --restart no --gpus all --network host --ipc host --ulimit memlock=-1:-1 -e "DS41RT_RELEASE_CONFIG_SHA256=$fingerprint" -e "RUST_LOG=$rust_log" "${rdma_args[@]}" -v "$hf_home:/root/.cache/huggingface:ro" "$image" ds41rt expertd-native --snapshot "/root/.cache/huggingface/$snapshot_rel" --native-lib /opt/ds41rt/lib/libds41rt_native.so --rank "$rank" --world "$world" --capacity "$capacity" --device-budget-bytes "$budget" --first-layer "$first_layer" --listen "0.0.0.0:$port" "${topology_args[@]}" >/dev/null
+ REMOTE
+   pids+=("$!")
+ done

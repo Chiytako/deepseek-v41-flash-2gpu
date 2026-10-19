@@ -1,0 +1,11 @@
+[package]
+name = "render-effort"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Test-workspace CLI: render a V4.1 chat prompt for given reasoning_effort values."
+
+[dependencies]
+deepseek-recipe = { path = "../deepseek-recipe" }
+deepseek-recipe-encoding = { path = "../deepseek-recipe-encoding" }
+serde_json = "1"

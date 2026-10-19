@@ -1,0 +1,124 @@
+--- a/ds41rt.config
++++ b/local.config.example
+@@ -1,13 +1,23 @@
++# Single host, 2x RTX PRO 6000 (96 GB each), no DGX Spark.
++# Copy to <ds41rt>/local.config and start with:
++#   ./run-local.sh --config local.config
++# Model: the EXL3 2.0bpw + L2 QAD pack from Hugging Face. Download it into the
++# HF cache first (hf download ChiTako/DeepSeek-V4.1-Flash-1017-EXL3-2.0bpw-QAD-ja); with MODEL_REVISION empty,
++# run-local.sh reads hub/models--ChiTako--DeepSeek-V4.1-Flash-1017-EXL3-2.0bpw-QAD-ja/refs/main.
++# Image: ds41rt-coordinator:v15-effort, built by scripts/build-effort-image.sh
++# (v15 + numeric reasoning_effort 1-100). With the stock v15 image use
++# ghcr.io/tpurtell/ds41rt-coordinator:v15 instead (level names only).
++
+ #################
+ # DeepSeek model #
+ #################
+ 
+-MODEL_ID=deepseek-ai/DeepSeek-V4.1-Flash
++MODEL_ID=ChiTako/DeepSeek-V4.1-Flash-1017-EXL3-2.0bpw-QAD-ja
+ MODEL_VARIANT=flash
+-MODEL_REVISION=dba1be0a40aa45a94ad051997016db3960a90277
++MODEL_REVISION=
+ 
+ # The standard v6 configuration runs the official V4.1 checkpoint without conversion.
+-EXPERT_FORMAT=native
++EXPERT_FORMAT=exl3
+ 
+ # The source KV cache uses FP4 E2M1/group-16 with E4M3 scales. SWA remains FP8.
+ # Production admits up to sixteen requests across the two native execution lanes.
+@@ -23,7 +33,7 @@
+ 
+ # Use two RTX cards when the calibrated deployment fits available memory and
+ # bidirectional peer reads are supported. Set 1 or 2 to force a layout.
+-RTX_GPUS=auto
++RTX_GPUS=2
+ 
+ # This host GPU becomes logical RTX0. The automatically selected peer becomes
+ # logical RTX1. Pin both fields below to keep RTX0 tied to a physical card even
+@@ -45,10 +55,10 @@
+ MAX_CONTEXT_TOKENS=1048576
+ MAX_OUTPUT_TOKENS=393216
+ CONCURRENCY=16
+-PREFIX_CACHE_ENTRIES=20
++PREFIX_CACHE_ENTRIES=8
+ # Size RAM paging so GPU + RAM token capacity exceeds retention slots * max context.
+ # auto also reserves snapshot overhead and restore staging; 0 disables RAM paging.
+-HOST_CACHE_BYTES=auto
++HOST_CACHE_BYTES=4GiB
+ PREFILL_BATCH_TOKENS=2048
+ 
+ ####################
+@@ -58,7 +68,7 @@
+ # Each Spark owns one TP rank and uses the next supported AOT capacity at or
+ # above PREFILL_BATCH_TOKENS. The budget includes resident experts and workspace.
+ SPARK_DEVICE_BUDGET_BYTES=107374182400
+-SPARKINFER_EXL3=disable
++SPARKINFER_EXL3=force
+ # Build paired H128 Spark kernels with two blocks/SM at capacity 80.
+ # run.sh selects ownership from matching image manifests for EXL3 checkpoints.
+ EXL3_PAIRED_TP4=off
+@@ -70,40 +80,44 @@
+ ADDR=0.0.0.0:8000
+ EXPERT_PORT=19441
+ 
+-SPARK_0_HOST=ostrich
+-SPARK_1_HOST=dodo
+-SPARK_2_HOST=emu
+-SPARK_3_HOST=kiwi
++SPARK_0_HOST=
++SPARK_1_HOST=
++SPARK_2_HOST=
++SPARK_3_HOST=
+ # Fifth/sixth connected hosts. The default SPARK_COUNT=4 serving selection does
+ # not launch them, but stop.sh cleans up every configured host, so naming them
+ # lets a cleanup reach containers a previous six-rank run left behind. An
+ # explicit six-rank topology (examples/configs/*ep*-native.config) selects them.
+-SPARK_4_HOST=rhea
+-SPARK_5_HOST=moa
+-SPARK_0_LANE_A=10.55.0.1
+-SPARK_1_LANE_A=10.55.0.2
+-SPARK_2_LANE_A=10.55.0.3
+-SPARK_3_LANE_A=10.55.0.4
+-SPARK_4_LANE_A=10.55.0.5
+-SPARK_5_LANE_A=10.55.0.6
++SPARK_4_HOST=
++SPARK_5_HOST=
++SPARK_0_LANE_A=
++SPARK_1_LANE_A=
++SPARK_2_LANE_A=
++SPARK_3_LANE_A=
++SPARK_4_LANE_A=
++SPARK_5_LANE_A=
+ 
+ # Optional secondary Spark-to-Spark reduction rail: set a value for every
+ # active SPARK rank or for none (all-or-none over the configured ranks; the
+ # shipped default now names all six). The candidate native launcher is
+ # single-rail A-only, so these are unused unless a four-Spark secondary-rail
+ # launch explicitly selects them.
+-SPARK_0_LANE_B=10.55.1.1
+-SPARK_1_LANE_B=10.55.1.2
+-SPARK_2_LANE_B=10.55.1.3
+-SPARK_3_LANE_B=10.55.1.4
+-SPARK_4_LANE_B=10.55.1.5
+-SPARK_5_LANE_B=10.55.1.6
++SPARK_0_LANE_B=
++SPARK_1_LANE_B=
++SPARK_2_LANE_B=
++SPARK_3_LANE_B=
++SPARK_4_LANE_B=
++SPARK_5_LANE_B=
+ 
+ ####################
+ # Build and deploy #
+ ####################
+ 
+ COORDINATOR_DOCKER_DEV=ds41rt-coordinator-dev
+-COORDINATOR_DOCKER_INFERENCE=ghcr.io/tpurtell/ds41rt-coordinator:v15
++COORDINATOR_DOCKER_INFERENCE=ds41rt-coordinator:v15-effort
+ SPARK_EXPERT_DOCKER_DEV=ds41rt-spark-expert-dev
+ SPARK_EXPERT_DOCKER_INFERENCE=ghcr.io/tpurtell/ds41rt-spark-expert:v15
++
++# Local: no Spark ranks; all 40 routed-expert layers stay on the two RTX cards.
++SPARK_COUNT=0
++RTX_EXPERT_LAYERS=40

@@ -1,0 +1,32 @@
+# build outputs
+target/
+**/target/
+.cargo-home/
+__pycache__/
+*.py[cod]
+.venv/
+**/.venv/
+
+# proxy runtime state and logs (request bodies, HMAC key, sqlite)
+proxy/logs/
+proxy/state/
+proxy/tests/results_*
+proxy/tests/replay_corpus.jsonl
+proxy/tests/*.log
+
+# private or non-redistributable data and intermediates (bring your own)
+quant/ref/
+quant/work/
+quant/models/
+quant/hf/
+quant/build/quant-logs/
+quant/build/vllm_exl3_cache/
+*.pt
+*.safetensors
+*.parquet
+*.u32
+
+# local configs
+ds41rt-patch/local.config
+*.rendered.toml
+.env

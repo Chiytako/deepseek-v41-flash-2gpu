@@ -1,0 +1,110 @@
+From d4faef20b6ccd192fdf23f5fec41a51aec665d44 Mon Sep 17 00:00:00 2001
+From: Chiytako <236713266+Chiytako@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 12:00:00 +0900
+Subject: [PATCH 2/2] Add a derived coordinator image with the numeric-effort
+ binary
+
+scripts/build-effort-image.sh compiles the ds41rt binary inside the
+published v15 coordinator image (same toolchain and glibc), runs the
+recipe and ds41rt-api tests, and layers the binary over v15 with
+docker/Dockerfile.effort as ds41rt-coordinator:v15-effort. The native
+library, AOT kernels and v15 labels are inherited unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docker/Dockerfile.effort      | 25 ++++++++++++++++++
+ scripts/build-effort-image.sh | 50 +++++++++++++++++++++++++++++++++++
+ 2 files changed, 75 insertions(+)
+ create mode 100644 docker/Dockerfile.effort
+ create mode 100755 scripts/build-effort-image.sh
+
+diff --git a/docker/Dockerfile.effort b/docker/Dockerfile.effort
+new file mode 100644
+index 0000000..6b111b0
+--- /dev/null
++++ b/docker/Dockerfile.effort
+@@ -0,0 +1,25 @@
++# Derived coordinator image: the published v15 coordinator with only the Rust
++# `ds41rt` binary replaced by a build that accepts numeric reasoning effort
++# (1-100, integer or numeric string) besides the level names. The native
++# library (libds41rt_native.so), AOT kernels, Python packages and the v15
++# labels (engine revision, SparkInfer revision) are inherited unchanged, so
++# run-local.sh's image identity checks keep passing.
++#
++# Build with scripts/build-effort-image.sh (stages the binary into a small
++# context directory so the repository is not sent to the daemon).
++ARG BASE_IMAGE=ghcr.io/tpurtell/ds41rt-coordinator:v15
++FROM ${BASE_IMAGE}
++
++ARG DS41RT_EFFORT_SOURCE=unknown
++COPY ds41rt /opt/ds41rt/bin/ds41rt
++# Smoke-test the binary without BASH_ENV/ENV: through them the image's
++# /bin/sh (sh-wrap) and bash source the CUDA image's /etc/shinit_v2, which
++# would leave a build-container compat marker
++# (/usr/local/cuda/compat/.<driver>.<hostname>.checked) in this layer.
++RUN ["/usr/bin/env", "-u", "BASH_ENV", "-u", "ENV", "/bin/sh", "-c", "chmod 0755 /opt/ds41rt/bin/ds41rt && ds41rt-release-entrypoint ds41rt --help >/dev/null"]
++
++# Display-only: the live console shows this as the release.
++ENV DS41RT_RELEASE_VERSION=v15-effort
++LABEL io.ds41rt.patch="numeric-reasoning-effort"
++LABEL io.ds41rt.patch.base="ghcr.io/tpurtell/ds41rt-coordinator:v15"
++LABEL io.ds41rt.patch.source_sha256=${DS41RT_EFFORT_SOURCE}
+diff --git a/scripts/build-effort-image.sh b/scripts/build-effort-image.sh
+new file mode 100755
+index 0000000..4569d8a
+--- /dev/null
++++ b/scripts/build-effort-image.sh
+@@ -0,0 +1,50 @@
++#!/usr/bin/env bash
++# Build ds41rt-coordinator:v15-effort without a GPU: compile the Rust binary
++# inside the v15 coordinator image (same Ubuntu 24.04 / glibc 2.39 / Python 3.12
++# as the release; rustc 1.98.1 = the toolchain the v15 binary was built with),
++# then layer it over the v15 image with docker/Dockerfile.effort.
++#
++# Does not touch any running container. Requires sudo for docker and network
++# access for rustup/crates.io on the first run.
++set -euo pipefail
++
++repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++base_image="${DS41RT_EFFORT_BASE_IMAGE:-ghcr.io/tpurtell/ds41rt-coordinator:v15}"
++target_image="${DS41RT_EFFORT_IMAGE:-ds41rt-coordinator:v15-effort}"
++cache="${DS41RT_EFFORT_CACHE:-$HOME/.cache/ds41rt/builds/effort}"
++context="${DS41RT_EFFORT_CONTEXT:-$cache/context}"
++toolchain="${DS41RT_EFFORT_RUST:-1.98}"
++uid="$(id -u)"; gid="$(id -g)"
++
++python3 "$repo_root/scripts/assert-build-filesystem.py" "$repo_root" "$cache"
++mkdir -p "$cache"/{rustup,cargo,home,target} "$context"
++
++in_base() {
++  sudo docker run --rm --user "$uid:$gid" \
++    -v "$cache:/build" -v "$repo_root:/src" \
++    -e RUSTUP_HOME=/build/rustup -e CARGO_HOME=/build/cargo -e HOME=/build/home \
++    -e CARGO_TARGET_DIR=/build/target -e RUSTUP_TOOLCHAIN="$toolchain" \
++    -e PYO3_PYTHON=python3 -e DS41RT_DISABLE_NATIVE_AUTO_DISCOVERY=1 \
++    -e RUSTFLAGS="${RUSTFLAGS:--Awarnings}" \
++    -w /src --entrypoint bash "$base_image" -c "$1"
++}
++
++if [[ ! -x "$cache/cargo/bin/cargo" ]]; then
++  in_base 'curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none --no-modify-path'
++fi
++in_base "/build/cargo/bin/rustup toolchain install '$toolchain' --profile minimal >/dev/null"
++
++if [[ "${DS41RT_EFFORT_SKIP_TESTS:-0}" != 1 ]]; then
++  in_base '/build/cargo/bin/cargo test --manifest-path third_party/deepseek-recipe-patched/Cargo.toml --workspace -q'
++  in_base '/build/cargo/bin/cargo test --manifest-path rust/Cargo.toml -p ds41rt-api -q'
++fi
++in_base '/build/cargo/bin/cargo build --manifest-path rust/Cargo.toml -p ds41rt-daemon --release --locked'
++
++install -m 0755 "$cache/target/release/ds41rt" "$context/ds41rt"
++source_sha="$(cd "$repo_root" && cat rust/Cargo.lock rust/crates/ds41rt-api/src/request.rs \
++  rust/crates/ds41rt-api/src/encoding.rs rust/crates/ds41rt-api/src/native_v41.rs \
++  $(find third_party/deepseek-recipe-patched -name '*.rs' | sort) | sha256sum | cut -d' ' -f1)"
++sudo docker build -f "$repo_root/docker/Dockerfile.effort" \
++  --build-arg BASE_IMAGE="$base_image" --build-arg DS41RT_EFFORT_SOURCE="$source_sha" \
++  -t "$target_image" "$context"
++echo "built $target_image (binary sha256 $(sha256sum "$context/ds41rt" | cut -d' ' -f1))"
+-- 
+2.56.0
+

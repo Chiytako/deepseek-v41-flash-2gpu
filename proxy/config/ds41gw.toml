@@ -1,0 +1,111 @@
+# ds41gw の設定 (コンテナ内のパス)。既定値は r7_proxy_spec.md §14。
+# 書いていない項目は既定値になる。[要決定] の項目は仕様の提案値のまま (§18.1)。
+
+[server]
+# 既定は 127.0.0.1 だけ。LAN / Tailscale に出すなら "<その IP>:30001" を足す (run_proxy.sh では DS41GW_LISTEN_IPS)
+# run_proxy.sh は listen を DS41GW_PORT と DS41GW_LISTEN_IPS から作り直す (この行は ds41gw を直に動かすときだけ効く)
+listen = ["127.0.0.1:30001"]
+max_body_mb = 96
+shutdown_grace_s = 30
+header_read_timeout_s = 60       # 要求ヘッダを読み終えるまで (slowloris 対策。keep-alive の待ちにも数える)。0 で無効
+body_idle_timeout_s = 60         # 本文のかたまりの間隔の上限。超えたら 408
+body_read_timeout_s = 600        # 本文を読み終えるまでの合計の上限。超えたら 408
+allowed_hosts = []               # ブラウザ (Origin / Sec-Fetch-Site 付き) の要求で許す Host 名。IP と localhost は常に可 (DNS rebinding 対策)
+
+[upstream]
+url = "http://127.0.0.1:8000"
+model = "deepseek-ai/DeepSeek-V4.1-Flash"
+max_concurrency = 16
+connect_timeout_s = 2
+idle_timeout_s = 600
+retry_midstream_nonstream = 1
+
+[queue]
+max_waiting = 256
+timeout_s = 600
+
+[client]
+keepalive_interval_s = 15
+early_headers_after_s = 10
+nonstream_whitespace_keepalive = false
+
+[models]
+alias_mode = "any"
+aliases = ["DeepSeek-V4.1-Flash", "deepseek-v4.1-flash", "GLM-5.3-Flash"]
+echo_requested = true
+
+[sampling]
+default = "recommended"          # temperature 1.0 / top_p 1.0。"greedy" で ds41rt の素の挙動  [要決定]
+
+[thinking]
+default = "enabled"
+# effort は「思考なし」か整数 1〜100 (V4.1 の Reasoning Effort: N)。要求の値は段階名・整数・数値文字列のどれでもよい
+# (1〜100 はそのまま、0 は思考なし、0<x<1 は ×100、他の小数は四捨五入、範囲外は 400)。
+default_effort = "high"          # effort を省いた要求の値 (段階名か "1"〜"100")。high = 75
+# 段階名 → effort (0〜100、0 は思考なし)。ここに書いた鍵だけを既定の表に上書きする (新しい名前も足せる)。
+# 既定の表: none/off/disabled = 0、minimal/low = 50、medium = 62、high = 75、xhigh = 88、max/ultra = 100。
+# low/high/max は公式の値。medium 62 と xhigh 88 は独自の対応 (公式は low/high/max の 3 つだけを定め、
+# deepseek-recipe は medium/xhigh を 75 に写す)。公式に揃えるなら medium = 75, xhigh = 75 と書く。
+effort_map = { none = 0, off = 0, disabled = 0, minimal = 50, low = 50, medium = 62, high = 75, xhigh = 88, max = 100, ultra = 100 }
+# budget_tokens → effort: 8192 未満は 50、32768 未満は 75、それ以上は 100
+budget_low_below = 8192
+budget_high_below = 32768
+# true: ds41rt に reasoning_effort を整数で送る (ds41rt 改修版 v15-effort 以降)。
+# false: 段階名 (≤61 low、62〜88 high、他 max) に戻して送る (段階名しか受けない旧 ds41rt に戻したとき用)。
+#        medium (62) と xhigh (88) は公式どおり high になる
+numeric_upstream = true
+auto_off_below_max_tokens = 0    # [要決定] T-A9 の結果で決める
+
+[limits]
+default_max_tokens = 262144      # [要決定]
+max_n = 8
+max_tool_calls_per_response = 32
+image_overflow = "drop_oldest"
+
+[compat]
+unsupported = "reject"
+repair_tool_history = true
+tool_none_strategy = "flatten"
+strip_dsml = true
+null_content_for_tool_calls = false
+ignore_builtin_tools = []
+
+[reasoning]
+output_mode = "auto"
+always_encrypted = false
+reinject = true
+reinject_store_mb = 512
+reinject_ttl_h = 24
+
+[state]
+backend = "sqlite"
+path = "/var/lib/ds41gw/responses.sqlite"
+secret_key_path = "/var/lib/ds41gw/secret.key"
+memory_items = 2000
+memory_mb = 1024                 # プロセス内 LRU のバイト上限 (画像入りの input で膨らまないように)
+ttl_days = 30
+max_gb = 20
+
+[tokens]
+tokenizer = "/models/tokenizer.json"
+image_estimate = 1024
+
+[log]
+dir = "/var/log/ds41gw"
+bodies = "full"                  # [要決定]
+outputs = false
+images = "hash"
+retention_days = 14
+max_total_gb = 50
+
+[auth]
+keys = []                        # 例: [{ name = "client-a", sha256 = "<キーの sha256>", max_concurrency = 8 }]
+allow_without_key = ["127.0.0.1/32", "::1/128", "172.17.0.0/16"]
+
+[cors]
+allow_origins = []
+
+[completions]
+enabled = true
+thinking = false
+default_max_tokens = 16
