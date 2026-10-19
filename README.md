@@ -1,8 +1,8 @@
 # deepseek-v41-flash-2gpu
 
 DeepSeek-V4.1-Flash-1017 を、1 台のワークステーション (RTX PRO 6000 96GB × 2) で動かすための一式。
-2bit の EXL3 量子化と局所 QAD で作った重みのパック、推論エンジン [ds41rt](https://github.com/tpurtell/ds41rt) への小さな改修、
-OpenAI / Anthropic 互換の API プロキシ、量子化と QAD の道具、調査の記録をまとめてある。
+2bit の EXL3 量子化と、日本語を重く見た scale 校正 (expert ごとの scale だけを合わせる局所蒸留) で作った重みのパック、推論エンジン [ds41rt](https://github.com/tpurtell/ds41rt) への小さな改修、
+OpenAI / Anthropic 互換の API プロキシ、量子化と校正の道具、調査の記録をまとめてある。
 
 [English summary](#english)
 
@@ -16,7 +16,7 @@ OpenAI / Anthropic 互換の API プロキシ、量子化と QAD の道具、調
 | 項目 | 結果 |
 |---|---|
 | 重みの大きさ | 334GB (48 shard)。うち Engram 表が約 200GB で、NVMe から必要な行だけ読む。GPU に載るのは experts と非 expert の層 |
-| 品質 (教師 = 1017 原重み、teacher-forced、top-32 上の KL) | エージェント要求 KL 0.158 (無校正 v0) → 0.059 (v1: Viterbi + scale refit) → **0.046** (v1-l2e: + L2 QAD)。top-1 一致 86.4% → 91.8% → **92.5%** |
+| 品質 (教師 = 1017 原重み、teacher-forced、top-32 上の KL) | エージェント要求 KL 0.158 (無校正 v0) → 0.059 (v1: Viterbi + scale refit) → **0.046** (v1-l2e: + L2 scale 校正)。top-1 一致 86.4% → 91.8% → **92.5%** |
 | 日本語 | 日本語回答 KL 0.206 → 0.074 → **0.060**、日本語の文章 (Wikipedia・青空文庫など 32 本) KL 0.139 → **0.120** (v1 → l2e) |
 | 中国語の混入 (中国語専用トークンの確率質量、教師比) | 日本語回答で 7.83 倍 (v0) → 2.20 倍 (v1) → **0.98 倍** (l2e) |
 | 画像 | 245 問の正答率 87.9% (v1) → **88.0%** (l2e)。画像 KL 0.251 (v0) → 0.132 → **0.121** |
@@ -37,24 +37,26 @@ flowchart LR
   G -->|Chat Completions のみ<br/>stream / 整数の reasoning_effort| R[ds41rt v15-effort<br/>coordinator :8000<br/>ds41rt-patch/]
   R --> GPU[RTX PRO 6000 × 2<br/>routed experts 40 層・非 expert 層・KV]
   R -.->|Engram 表を pread| N[(NVMe<br/>Engram 約 200GB)]
-  W[(Hugging Face<br/>EXL3 2.0bpw + L2 QAD パック)] -.->|hf download| N
-  Q[quant/<br/>量子化と QAD の道具] -.->|作る| W
+  W[(Hugging Face<br/>EXL3 2.0bpw + scale 校正パック)] -.->|hf download| N
+  Q[quant/<br/>量子化と校正の道具] -.->|作る| W
 ```
 
 | ディレクトリ | 中身 |
 |---|---|
 | [`proxy/`](proxy/) | **ds41gw**: ds41rt の前に置く API 変換プロキシ (Rust)。ds41rt は Chat Completions しか出さないので、Responses と Anthropic Messages を変換し、クライアントごとの癖 (model 名、既定値、思考の指定、ツール履歴) を吸収する |
 | [`ds41rt-patch/`](ds41rt-patch/) | ds41rt (upstream `3067d06` = v15) への改修。reasoning effort を整数 1〜100 で受ける。パッチ、改修した deepseek-recipe、1 台用の起動の差分と設定の雛形 |
-| [`quant/`](quant/) | 量子化と QAD の道具。層ストリーミングの参照ハーネス、MoE の入出力の捕捉、L2 局所 QAD、評価 (KL・中国語混入・画像)、校正データの組み立て、ビルドの手順 |
+| [`quant/`](quant/) | 量子化と校正の道具。層ストリーミングの参照ハーネス、MoE の入出力の捕捉、L2 scale 校正、評価 (KL・中国語混入・画像)、校正データの組み立て、ビルドの手順 |
 | [`docs/`](docs/) | 調査の記録 (`research/`) と結果 (`results/`)。日本語 |
 
 ## 重み
 
-Hugging Face: [`ChiTako/DeepSeek-V4.1-Flash-1017-EXL3-2.0bpw-QAD-ja`](https://huggingface.co/ChiTako/DeepSeek-V4.1-Flash-1017-EXL3-2.0bpw-QAD-ja)
+Hugging Face: [`ChiTako/DeepSeek-V4.1-Flash-1017-EXL3-2.0bpw-ja-calibrated`](https://huggingface.co/ChiTako/DeepSeek-V4.1-Flash-1017-EXL3-2.0bpw-ja-calibrated)
 
 - 元: `deepseek-ai/DeepSeek-V4.1-Flash` の 1017 版 (MIT)。
 - routed experts (40 層 × 384 本 × 3 行列): EXL3 2.0bpw、K2 MCG コードブック。exllamav3 1.5.1 の Viterbi で再符号化し、scale (suh/svh) を閉形式で合わせ直した (v1)。
-- そのうえで L2 局所 QAD: EXL3 の離散コードは固定し、各 expert の suh/svh だけを、教師 (原重み) の expert 出力に合わせて蒸留した。
+- そのうえで L2 scale 校正 (layer-wise scale-only distillation): EXL3 の離散コードは固定し、各 expert の suh/svh (計約 3.4 億値) だけを、層ごとに教師 (原重み) の expert 出力に合わせた。
+  重みや離散コードは学習せず、モデル全体での end-to-end の蒸留もしていない (全重みを学習する本来の QAT / QAD ではない)。
+  道具とメモではこの段を QAD (ここでは scale-only の局所蒸留のこと) と呼んでいる (`quant/harness/qad_l2.py`、`docs/research/QAD_PLAN.md`)。
   校正は 256K トークン (日本語 40%) と画像入り 24 系列、画像の重み 1.5、画像の誤差が悪化する expert は採らない (画像ガード)。採用 14,582 / 15,360 本。
 - 非 expert の層 (attention、shared expert、embedding、lm_head、ViT) と Engram 表は公式 1017 と同じバイト列。
 
@@ -67,7 +69,7 @@ Hugging Face: [`ChiTako/DeepSeek-V4.1-Flash-1017-EXL3-2.0bpw-QAD-ja`](https://hu
 git clone https://github.com/Chiytako/deepseek-v41-flash-2gpu
 
 # 1. 重み (334GB) を HF キャッシュに落とす
-hf download ChiTako/DeepSeek-V4.1-Flash-1017-EXL3-2.0bpw-QAD-ja
+hf download ChiTako/DeepSeek-V4.1-Flash-1017-EXL3-2.0bpw-ja-calibrated
 
 # 2. ds41rt に改修を当てて、派生イメージを作る (GPU 不要。初回は rustup と crates.io に接続する)
 git clone https://github.com/tpurtell/ds41rt && cd ds41rt
@@ -85,7 +87,7 @@ $EDITOR local.config
 
 # 4. プロキシ
 cd ../deepseek-v41-flash-2gpu/proxy
-DS41GW_TOKENIZER="$(hf download ChiTako/DeepSeek-V4.1-Flash-1017-EXL3-2.0bpw-QAD-ja tokenizer.json)" ./run_proxy.sh   # :30001 (hf download はキャッシュ内のパスを出す)
+DS41GW_TOKENIZER="$(hf download ChiTako/DeepSeek-V4.1-Flash-1017-EXL3-2.0bpw-ja-calibrated tokenizer.json)" ./run_proxy.sh   # :30001 (hf download はキャッシュ内のパスを出す)
 
 curl -s localhost:30001/v1/chat/completions -H 'content-type: application/json' \
   -d '{"model":"x","messages":[{"role":"user","content":"日本の首都は？"}],"reasoning_effort":"low","max_tokens":256}'
@@ -128,15 +130,15 @@ MIT ([LICENSE](LICENSE))。第三者のコードとデータは [THIRD_PARTY_NOT
 ## English
 
 Everything needed to run **DeepSeek-V4.1-Flash-1017 on a single workstation with two RTX PRO 6000 (96 GB) GPUs**:
-a 2-bit EXL3 weight pack refined with local QAD, a small patch to the [ds41rt](https://github.com/tpurtell/ds41rt) inference engine,
-an OpenAI/Anthropic-compatible API proxy, the quantization/QAD tooling, and the research notes (in Japanese).
+a 2-bit EXL3 weight pack with a Japanese-weighted scale calibration (layer-wise, scale-only distillation of the expert scales), a small patch to the [ds41rt](https://github.com/tpurtell/ds41rt) inference engine,
+an OpenAI/Anthropic-compatible API proxy, the quantization/calibration tooling, and the research notes (in Japanese).
 
 **Results** (2x RTX PRO 6000 Blackwell Max-Q 300 W, 128 GB RAM, Engram tables on NVMe; ds41rt v15 without Spark nodes):
 
 | | |
 |---|---|
 | Pack | 334 GB in 48 shards; routed experts in EXL3 2.0 bpw (K2, MCG codebook); non-expert layers and Engram tables byte-identical to the official 1017 checkpoint |
-| Quality vs. the 1017 original (teacher-forced KL over teacher top-32) | agent prompts 0.158 (uncalibrated) → 0.059 (Viterbi re-encode + scale refit) → **0.046** (+ L2 QAD); top-1 agreement 86.4% → 91.8% → **92.5%**; Japanese answers 0.206 → 0.074 → **0.060** |
+| Quality vs. the 1017 original (teacher-forced KL over teacher top-32) | agent prompts 0.158 (uncalibrated) → 0.059 (Viterbi re-encode + scale refit) → **0.046** (+ L2 scale calibration); top-1 agreement 86.4% → 91.8% → **92.5%**; Japanese answers 0.206 → 0.074 → **0.060** |
 | Chinese leakage into Japanese answers (Chinese-only token mass, relative to teacher) | 7.83× → 2.20× → **0.98×** |
 | Vision | 245-question accuracy 87.9% → **88.0%** |
 | Decode (thinking on, T=0.6) | **116 tok/s** single stream, **413 tok/s** aggregate at 16 concurrent |
@@ -145,7 +147,7 @@ an OpenAI/Anthropic-compatible API proxy, the quantization/QAD tooling, and the 
 
 **Layout**: `proxy/` (ds41gw, Rust: Chat Completions, Responses and Anthropic Messages on top of ds41rt's Chat-only API),
 `ds41rt-patch/` (patches against upstream `3067d06`: numeric `reasoning_effort` 1–100, a derived `v15-effort` image, a single-host launcher diff and config template),
-`quant/` (layer-streaming reference harness, MoE capture, L2 local QAD, KL / Chinese-leakage / vision evaluation, calibration builder, build scripts),
+`quant/` (layer-streaming reference harness, MoE capture, L2 scale calibration (`qad_l2.py`; "QAD" in file names means only this layer-wise, scale-only distillation; no weights or codes are trained, and there is no end-to-end distillation), KL / Chinese-leakage / vision evaluation, calibration builder, build scripts),
 `docs/` (research notes and results).
 
 **Reasoning effort**: level names map to none → no thinking, minimal/low → 50, **medium → 62**, high (default) → 75, **xhigh → 88**, max → 100; integers 1–100 pass through.

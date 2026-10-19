@@ -1,6 +1,7 @@
-# quant: 量子化と QAD の道具
+# quant: 量子化と scale 校正の道具
 
-DeepSeek-V4.1-Flash-1017 の routed experts を EXL3 2.0bpw にし、局所 QAD で scale を合わせ直したときの道具一式。
+DeepSeek-V4.1-Flash-1017 の routed experts を EXL3 2.0bpw にし、scale 校正 (expert ごとの scale だけを層ごとに教師の出力へ合わせる局所蒸留) で合わせ直したときの道具一式。
+スクリプト名やメモに出てくる QAD は、ここでは scale-only の局所蒸留のことで、重みや離散コードは学習せず、モデル全体での end-to-end の蒸留もしていない。
 公開している重みのパックは、ここの手順で作った (v0 → v1 → v1-l2e)。
 
 **手元で使った形のまま入れてある。** 作業場の決め打ちのパスは環境変数に置き換えたが、それ以外は手を入れていない。
@@ -12,9 +13,9 @@ DeepSeek-V4.1-Flash-1017 の routed experts を EXL3 2.0bpw にし、局所 QAD 
 
 ```
 $DSV41/                 (= quant/)
-├── harness/            参照ハーネス・捕捉・QAD (このリポジトリ)
+├── harness/            参照ハーネス・捕捉・scale 校正 (このリポジトリ)
 ├── tools/              評価・校正データ・調査の道具 (このリポジトリ)
-├── build/              量子化・QAD・評価の手順 (このリポジトリ)
+├── build/              量子化・scale 校正・評価の手順 (このリポジトリ)
 │   └── qrecipe/tools/  EXL3 の量子化器 (sfxnz / diffbot のレシピ由来)
 ├── ref/                公式の参照実装 (各自で用意: 公式 HF repo の inference/ の中身)
 ├── work/               データと中間生成物 (各自で用意。下の「データ」)
@@ -64,7 +65,7 @@ GPU の仕事はすべて docker の中で動かす (手順では `sudo docker`)
 `qad_l2.py apply --mode shards` は、差分のある層の shard だけを実体にコピーして suh/svh のバイト範囲を書き換え、他の shard は hardlink にする。公開パックはこの形 (`v1-l2e-shards`) である。
 `--mode overlay` はハーネス専用で、ds41rt には読ませない。
 
-### L2 局所 QAD の中身
+### L2 scale 校正 (QAD L2) の中身
 
 - 学生の各 expert は `W = diag(su) · H_in · Q · H_out · diag(sv)` (Q は EXL3 の trellis を su=sv=1 で復元した内側の行列、H は 128 次のブロック Hadamard)。
 - 学習するのは各 expert の w1/w3/w2 の `suh` / `svh` (22,272 値/expert) だけで、`su = su_v1 · (1 + δ)` の δ を学ぶ。離散コード (trellis) は固定する。
@@ -90,7 +91,7 @@ GPU の仕事はすべて docker の中で動かす (手順では `sudo docker`)
 | `harness/stream_ref.py` | 層ストリーミングの参照ハーネス。experts を必要な分だけ GPU に読み、Engram は pread する。教師の logits / 学生の採点 / greedy 生成 |
 | `harness/stream_ref_vl.py`、`harness/vl_rows.py` | 画像入り系列の版と、画像入りの行の形式 |
 | `harness/capture_moe.py` | 教師の MoE の入力と routing を層ごとに記録する (`run` / `verify` / `info` / `plan` / `pack`) |
-| `harness/qad_l2.py` | L2 局所 QAD (`check-decomp` / `check-teacher` / `estimate` / `train` / `apply`) |
+| `harness/qad_l2.py` | L2 scale 校正 (`check-decomp` / `check-teacher` / `estimate` / `train` / `apply`) |
 | `harness/qad_l3.py`、`qad_l3_design.md` | 全体 KL での scale-only QAD の骨格と設計 (未使用) |
 | `harness/svh_canary.py` | ds41rt が svh を clamp の前に掛けているかを確かめる差分を作る |
 | `harness/steer_*.py` | 言語方向の推定と、量子化のどこが中国語を増やすかの切り分け (調査用) |

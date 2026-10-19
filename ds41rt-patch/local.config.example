@@ -1,9 +1,9 @@
 # Single host, 2x RTX PRO 6000 (96 GB each), no DGX Spark.
 # Copy to <ds41rt>/local.config and start with:
 #   ./run-local.sh --config local.config
-# Model: the EXL3 2.0bpw + L2 QAD pack from Hugging Face. Download it into the
-# HF cache first (hf download ChiTako/DeepSeek-V4.1-Flash-1017-EXL3-2.0bpw-QAD-ja); with MODEL_REVISION empty,
-# run-local.sh reads hub/models--ChiTako--DeepSeek-V4.1-Flash-1017-EXL3-2.0bpw-QAD-ja/refs/main.
+# Model: the EXL3 2.0bpw + L2 scale-calibrated pack from Hugging Face. Download it into the
+# HF cache first (hf download ChiTako/DeepSeek-V4.1-Flash-1017-EXL3-2.0bpw-ja-calibrated); with MODEL_REVISION empty,
+# run-local.sh reads hub/models--ChiTako--DeepSeek-V4.1-Flash-1017-EXL3-2.0bpw-ja-calibrated/refs/main.
 # Image: ds41rt-coordinator:v15-effort, built by scripts/build-effort-image.sh
 # (v15 + numeric reasoning_effort 1-100). With the stock v15 image use
 # ghcr.io/tpurtell/ds41rt-coordinator:v15 instead (level names only).
@@ -12,7 +12,7 @@
 # DeepSeek model #
 #################
 
-MODEL_ID=ChiTako/DeepSeek-V4.1-Flash-1017-EXL3-2.0bpw-QAD-ja
+MODEL_ID=ChiTako/DeepSeek-V4.1-Flash-1017-EXL3-2.0bpw-ja-calibrated
 MODEL_VARIANT=flash
 MODEL_REVISION=
 

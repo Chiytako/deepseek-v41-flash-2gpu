@@ -1,6 +1,6 @@
 # ds41gw: ds41rt 前段の API 変換プロキシ
 
-ds41gw は ds41rt (DeepSeek-V4.1-Flash-1017 EXL3 2bit QAD、`localhost:8000`) の前に置くプロキシである。
+ds41gw は ds41rt (DeepSeek-V4.1-Flash-1017 EXL3 2bit、scale 校正版、`localhost:8000`) の前に置くプロキシである。
 GLM-5.3-Flash 時代に使っていた OpenAI / Anthropic 互換のクライアント (コーディングエージェントなど) を、設定を変えずに使えるようにする。
 仕様は [`docs/research/r7_proxy_spec.md`](../docs/research/r7_proxy_spec.md) (以下「仕様」) にある。ds41rt 本体には手を入れていない。
 

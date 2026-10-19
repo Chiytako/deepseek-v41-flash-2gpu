@@ -54,7 +54,7 @@ scripts/build-effort-image.sh
 ## 起動
 
 ```sh
-hf download ChiTako/DeepSeek-V4.1-Flash-1017-EXL3-2.0bpw-QAD-ja             # 重み (334GB) を HF キャッシュ ($HF_HOME、既定 ~/.cache/huggingface) に
+hf download ChiTako/DeepSeek-V4.1-Flash-1017-EXL3-2.0bpw-ja-calibrated             # 重み (334GB) を HF キャッシュ ($HF_HOME、既定 ~/.cache/huggingface) に
 cp ../deepseek-v41-flash-2gpu/ds41rt-patch/local.config.example local.config
 $EDITOR local.config                        # MODEL_ID を重みの repo にする。MODEL_REVISION は空なら refs/main を読む
 ./run-local.sh --config local.config        # 0.0.0.0:8000
