@@ -1,11 +1,17 @@
 # ds41rt-patch: ds41rt v15 への改修
 
-[ds41rt](https://github.com/tpurtell/ds41rt) (MIT、T.J. Purtell) の upstream `3067d06` (v15) に対する改修。中身は 2 つある。
+[ds41rt](https://github.com/tpurtell/ds41rt) (MIT、T.J. Purtell) の upstream `3067d06` (v15) に対する改修。中身は 3 つある。
 
 1. **reasoning effort を整数 1〜100 で受ける。** DeepSeek-V4.1 のプロンプトは `Reasoning Effort: N` で思考の深さを受けるが、
    公式の deepseek-recipe 0.1.0 と ds41rt v15 は段階名 (`low` / `high` / `max` など) しか受けない。
    改修版は、整数 (`60`)・数値文字列 (`"60"`)・段階名のどれでも受け、V4.1 には数値をそのまま描く。
 2. **1 台 (2x RTX PRO 6000、DGX Spark なし) で動かすための起動の差分と設定の雛形。**
+3. **raw EXL3 パックで、専門家ごとに K2 と K3 を混ぜられるようにする。** 上流の v15 は `config.json` だけで量子化を宣言するパック (raw publication) を
+   全専門家同じビット数としてしか読まない。改修版は `quantization_config.expert_bits` (`{"<層>.<専門家>": 3}`) を読み、
+   その専門家の w1/w3/w2 を K3 として扱う。K2/K3 の 2 段の配置とカーネル (`exl3-k23`) は上流にもともとあるので、変えたのは読み込みだけ。
+   2026-10-27 以降の HF の重み (日本語 OCR で使われる専門家 1,280 個を K3 にしたもの) は、**この改修が無いと読めない**。
+   この重みは K3 のぶん GPU メモリを 5.3GiB 多く使う。2x 96GB では設定に `KV_POOL_SIZE=7.5GB` (既定は約 1,400 万トークン = 13.1GB) を足し、
+   CUDA グラフと画像エンコーダの余白を 1 枚あたり約 3GB 残す。既定のままだと、16 本同時の長い要求のあとに画像の要求がメモリ不足で失敗した。
 
 ds41rt の Rust のバイナリだけを差し替えた派生イメージ `ds41rt-coordinator:v15-effort` を作る。ネイティブライブラリ (`libds41rt_native.so`)、
 AOT カーネル、Python のパッケージ、v15 のラベルは公開イメージ `ghcr.io/tpurtell/ds41rt-coordinator:v15` のまま引き継ぐ。
@@ -16,6 +22,7 @@ AOT カーネル、Python のパッケージ、v15 のラベルは公開イメ�
 |---|---|
 | `patches/0001-ds41rt-api-accept-numeric-reasoning-effort-1-100.patch` | `rust/Cargo.toml` に `[patch.crates-io]` を足して改修版の recipe を使う。`ds41rt-api` の `request.rs` (effort の解析)、`encoding.rs` (V4 の段階への丸め)、`native_v41.rs` (試験) |
 | `patches/0002-Add-a-derived-coordinator-image-with-the-numeric-eff.patch` | `docker/Dockerfile.effort` と `scripts/build-effort-image.sh` (GPU なしで派生イメージを作る) |
+| `patches/0003-Accept-per-expert-K-tiers-in-raw-EXL3-publications.patch` | `ds41rt-loader` の `v41_exl3.rs` (`expert_bits` の解釈と試験) |
 | `third_party/deepseek-recipe-patched/` | deepseek-recipe / -core / -encoding 0.1.0 (MIT、DeepSeek) の改修版。ds41rt の `third_party/` にそのまま置く。中身は [その README](third_party/deepseek-recipe-patched/README.md) |
 | `run-local.sh.diff` | `run.sh` → `run-local.sh` の差分。docker の `--device=/dev/infiniband` を外す (InfiniBand / RoCE の無い機械では、これがあるとコンテナが起動しない) |
 | `local.config.example` | 1 台用の設定の雛形 (`SPARK_COUNT=0`、`RTX_GPUS=2`、`RTX_EXPERT_LAYERS=40`、`EXPERT_FORMAT=exl3`、`SPARKINFER_EXL3=force`、`HOST_CACHE_BYTES=4GiB`、`PREFIX_CACHE_ENTRIES=8`) |
@@ -63,6 +70,7 @@ $EDITOR local.config                        # MODEL_ID を重みの repo にす�
 
 - `COORDINATOR_GPU_UUID` と `COORDINATOR_GPU_PCI_BUS_ID` は、`nvidia-smi` で調べて固定しておくと、再起動で GPU の番号が変わっても同じカードが RTX0 になる。
 - 改修していない v15 のまま使うときは、`COORDINATOR_DOCKER_INFERENCE=ghcr.io/tpurtell/ds41rt-coordinator:v15` にする (effort は段階名だけになり、`medium` と `xhigh` は 75 になる)。
+  ただし K2/K3 混在の重み (2026-10-27 以降の HF の main) は上流の v15 では読めない (`unexpected quantization_config key expert_bits` で止まる)。それより前の全 K2 の版を使う。
 - 起動は 50 秒ほど。`curl -s localhost:8000/health` で確かめる。
 
 ## effort の写し方

@@ -1,0 +1,133 @@
+From 7f7c2ab77a0f9b9edb05933f0bce1e67d72c2267 Mon Sep 17 00:00:00 2001
+From: Chiytako <236713266+Chiytako@users.noreply.github.com>
+Date: Tue, 27 Oct 2026 04:30:00 +0900
+Subject: [PATCH] Accept per-expert K tiers in raw EXL3 publications
+
+A raw EXL3 publication (config.json quantization_config only, no
+quantize_config.json) had to be uniform: every routed expert at the
+integer `bits`. An optional `expert_bits` object, {"<layer>.<expert>": K},
+now raises whole backbone experts to the next tier (K2 -> K3). The
+decoder family stays [bits, bits + 1], so the packaged exl3-k23 kernels
+and the existing two-tier residency layout serve it unchanged; trellis
+shapes are still checked against the safetensors headers per projection.
+
+Used to keep the routed experts that Japanese OCR selects most at K3
+while the rest stay K2.
+---
+ rust/crates/ds41rt-loader/src/v41_exl3.rs | 58 ++++++++++++++++++++++-
+ 1 file changed, 57 insertions(+), 1 deletion(-)
+
+diff --git a/rust/crates/ds41rt-loader/src/v41_exl3.rs b/rust/crates/ds41rt-loader/src/v41_exl3.rs
+index 78a0e51..995a46f 100644
+--- a/rust/crates/ds41rt-loader/src/v41_exl3.rs
++++ b/rust/crates/ds41rt-loader/src/v41_exl3.rs
+@@ -217,6 +217,10 @@ pub fn read_v41_exl3_manifest(snapshot: &Path) -> Result<V41Exl3Manifest> {
+ /// official FP8 block for every non-routed tensor. Tensor payload layouts
+ /// are verified against the safetensors headers by the catalog, so the
+ /// config only needs to establish geometry-independent facts.
++///
++/// Optional `expert_bits` ({"<layer>.<expert>": K}) raises whole backbone
++/// experts to another integer tier. The resulting family must stay within the
++/// two adjacent tiers the base family packages (for K2: K2 and K3).
+ fn parse_raw_publication(mut config: Value) -> Result<V41Exl3Manifest> {
+     let quant = config["quantization_config"]
+         .as_object()
+@@ -280,6 +284,7 @@ fn parse_raw_publication(mut config: Value) -> Result<V41Exl3Manifest> {
+                     | "group_size"
+                     | "desc_act"
+                     | "pack_dtype"
++                    | "expert_bits"
+             ),
+             "raw EXL3 publication has unexpected quantization_config key {key}"
+         );
+@@ -287,6 +292,26 @@ fn parse_raw_publication(mut config: Value) -> Result<V41Exl3Manifest> {
+     let mtp_start_layer = quant
+         .get("mtp_experts_start_layer")
+         .and_then(Value::as_u64);
++    let expert_bits = match quant.get("expert_bits") {
++        None => BTreeMap::new(),
++        Some(value) => value
++            .as_object()
++            .context("raw EXL3 expert_bits must be an object")?
++            .iter()
++            .map(|(key, value)| {
++                let parsed = key
++                    .split_once('.')
++                    .and_then(|(l, e)| Some((l.parse::<usize>().ok()?, e.parse::<usize>().ok()?)));
++                let (layer, expert) =
++                    parsed.with_context(|| format!("raw EXL3 expert_bits key {key} must be <layer>.<expert>"))?;
++                let k = value
++                    .as_u64()
++                    .filter(|k| *k == bits as u64 || *k == bits as u64 + 1)
++                    .with_context(|| format!("raw EXL3 expert_bits {key} must be K{bits} or K{}", bits + 1))?;
++                Ok(((layer, expert), k as usize))
++            })
++            .collect::<Result<BTreeMap<_, _>>>()?,
++    };
+     // Substitute the canonical official FP8 block so the strict official
+     // config validation covers every non-quantization field.
+     config["quantization_config"] = serde_json::json!({
+@@ -305,6 +330,12 @@ fn parse_raw_publication(mut config: Value) -> Result<V41Exl3Manifest> {
+             "raw EXL3 mtp_experts_start_layer {start_layer} disagrees with the architecture"
+         );
+     }
++    if let Some((layer, expert)) = expert_bits
++        .keys()
++        .find(|(l, e)| *l >= text.num_hidden_layers || *e >= text.n_routed_experts)
++    {
++        anyhow::bail!("raw EXL3 expert_bits names a missing expert {layer}.{expert}");
++    }
+     let mut projections = BTreeMap::new();
+     for layer in 0..text.num_hidden_layers {
+         for expert in 0..text.n_routed_experts {
+@@ -324,7 +355,7 @@ fn parse_raw_publication(mut config: Value) -> Result<V41Exl3Manifest> {
+                     V41Exl3Projection {
+                         name,
+                         kind,
+-                        bits,
++                        bits: expert_bits.get(&(layer, expert)).copied().unwrap_or(bits),
+                         input_features: input,
+                         output_features: output,
+                     },
+@@ -538,6 +569,20 @@ mod tests {
+             .eq_ignore_ascii_case("fp8"));
+     }
+ 
++    #[test]
++    fn raw_publication_expert_bits_raise_whole_experts() {
++        let mut config = raw_publication_config(2);
++        config["quantization_config"]["expert_bits"] = serde_json::json!({"0.5": 3, "39.383": 3, "7.1": 2});
++        let manifest = parse_raw_publication(config).unwrap();
++        assert_eq!(manifest.decoder_tiers(), &[2, 3]);
++        for stem in ["w1", "w3", "w2"] {
++            assert_eq!(manifest.projections[&format!("layers.0.ffn.experts.5.{stem}")].bits, 3);
++            assert_eq!(manifest.projections[&format!("layers.39.ffn.experts.383.{stem}")].bits, 3);
++            assert_eq!(manifest.projections[&format!("layers.7.ffn.experts.1.{stem}")].bits, 2);
++        }
++        assert_eq!(manifest.projections.values().filter(|p| p.bits == 3).count(), 6);
++    }
++
+     #[test]
+     fn raw_publication_rejects_contract_drift() {
+         for (pointer, value, expected) in [
+@@ -569,6 +614,17 @@ mod tests {
+             .unwrap_err()
+             .to_string()
+             .contains("unexpected quantization_config key"));
++        for (bits, expected) in [
++            (serde_json::json!({"0.0": 4}), "must be K2 or K3"),
++            (serde_json::json!({"40.0": 3}), "missing expert 40.0"),
++            (serde_json::json!({"0.384": 3}), "missing expert 0.384"),
++            (serde_json::json!({"layers.0": 3}), "must be <layer>.<expert>"),
++        ] {
++            let mut config = raw_publication_config(2);
++            config["quantization_config"]["expert_bits"] = bits;
++            let error = parse_raw_publication(config).unwrap_err().to_string();
++            assert!(error.contains(expected), "unexpected error: {error}");
++        }
+         let mut wrong_start = raw_publication_config(2);
+         wrong_start["quantization_config"]["mtp_experts_start_layer"] = serde_json::json!(39);
+         assert!(parse_raw_publication(wrong_start)
+-- 
+2.56.0
+

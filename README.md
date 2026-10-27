@@ -59,6 +59,9 @@ Hugging Face: [`ChiTako/DeepSeek-V4.1-Flash-1017-EXL3-2.0bpw-ja-calibrated`](htt
   道具とメモではこの段を QAD (ここでは scale-only の局所蒸留のこと) と呼んでいる (`quant/harness/qad_l2.py`、`docs/research/QAD_PLAN.md`)。
   校正は 256K トークン (日本語 40%) と画像入り 24 系列、画像の重み 1.5、画像の誤差が悪化する expert は採らない (画像ガード)。採用 14,582 / 15,360 本。
 - 非 expert の層 (attention、shared expert、embedding、lm_head、ViT) と Engram 表は公式 1017 と同じバイト列。
+- **2026-10-27 更新:** 日本語 OCR で多く選ばれる routed expert 1,280 個 (層あたり 32 個) を K3 (3bpw) にした (平均 2.08bpw、+5.3GiB)。
+  全 K2 の版より日本語 OCR が上がり (CC-OCR 日本語 40 枚で 43.7% → 48.3%、原重み 48.8%)、画像 245 問は 89.2% (原重み 88.8%)。
+  読むには [`ds41rt-patch`](ds41rt-patch/README.md) の 0003 と `KV_POOL_SIZE=7.5GB` が要る。以前の全 K2 の版は HF のタグ `all-k2`。手順は [`quant/README.md`](quant/README.md)。
 
 ## クイックスタート
 
@@ -82,7 +85,7 @@ scripts/build-effort-image.sh                      # -> ds41rt-coordinator:v15-e
 
 # 3. 設定を作って起動する (MODEL_ID は 1. の repo になっている。GPU の UUID などを必要に応じて直す)
 cp ../deepseek-v41-flash-2gpu/ds41rt-patch/local.config.example local.config
-$EDITOR local.config
+$EDITOR local.config                                # K3 の版 (HF の main) なら KV_POOL_SIZE=7.5GB を足す
 ./run-local.sh --config local.config                # :8000
 
 # 4. プロキシ
@@ -140,13 +143,13 @@ an OpenAI/Anthropic-compatible API proxy, the quantization/calibration tooling, 
 | Pack | 334 GB in 48 shards; routed experts in EXL3 2.0 bpw (K2, MCG codebook); non-expert layers and Engram tables byte-identical to the official 1017 checkpoint |
 | Quality vs. the 1017 original (teacher-forced KL over teacher top-32) | agent prompts 0.158 (uncalibrated) → 0.059 (Viterbi re-encode + scale refit) → **0.046** (+ L2 scale calibration); top-1 agreement 86.4% → 91.8% → **92.5%**; Japanese answers 0.206 → 0.074 → **0.060** |
 | Chinese leakage into Japanese answers (Chinese-only token mass, relative to teacher) | 7.83× → 2.20× → **0.98×** (1.0× = same as the original) |
-| Vision | 245-question accuracy 87.9% → **88.0%** (paired difference +0.1 pt [−1.2, +1.4], i.e. unchanged) |
+| Vision | 245-question accuracy 87.9% → **88.0%** (paired difference +0.1 pt [−1.2, +1.4], i.e. unchanged); after the 2026-10-27 K3 update for Japanese OCR experts **89.2%** (original weights 88.8%), CC-OCR Japanese 43.7% → **48.3%** (original 48.8%) |
 | Decode (thinking on, T=0.6) | **116 tok/s** single stream, **413 tok/s** aggregate at 16 concurrent |
 | ds41rt release bench (greedy, weighted) | **147.9 tok/s** |
 | vs. vLLM + vllm-exl3 on the same weights | +45% at 16 concurrent, 2.3–2.7× prefill |
 
 **Layout**: `proxy/` (ds41gw, Rust: Chat Completions, Responses and Anthropic Messages on top of ds41rt's Chat-only API),
-`ds41rt-patch/` (patches against upstream `3067d06`: numeric `reasoning_effort` 1–100, a derived `v15-effort` image, a single-host launcher diff and config template),
+`ds41rt-patch/` (patches against upstream `3067d06`: numeric `reasoning_effort` 1–100, a derived `v15-effort` image, per-expert K2/K3 tiers in raw EXL3 packs, a single-host launcher diff and config template),
 `quant/` (layer-streaming reference harness, MoE capture, L2 scale calibration (`qad_l2.py`; "QAD" in file names means only this layer-wise, scale-only distillation; no weights or codes are trained, and there is no end-to-end distillation), KL / Chinese-leakage / vision evaluation, calibration builder, build scripts),
 `docs/` (research notes and results).
 

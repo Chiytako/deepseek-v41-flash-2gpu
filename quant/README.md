@@ -2,7 +2,7 @@
 
 DeepSeek-V4.1-Flash-1017 の routed experts を EXL3 2.0bpw にし、scale 校正 (expert ごとの scale だけを層ごとに教師の出力へ合わせる局所蒸留) で合わせ直したときの道具一式。
 スクリプト名やメモに出てくる QAD は、ここでは scale-only の局所蒸留のことで、重みや離散コードは学習せず、モデル全体での end-to-end の蒸留もしていない。
-公開している重みのパックは、ここの手順で作った (v0 → v1 → v1-l2e)。
+公開している重みのパックは、ここの手順で作った (v0 → v1 → v1-l2e → v1-l2e + 日本語 OCR の専門家を K3)。
 
 **手元で使った形のまま入れてある。** 作業場の決め打ちのパスは環境変数に置き換えたが、それ以外は手を入れていない。
 私的なデータを前提にした道具も含むので、使うときはデータを各自で用意する (下の「データ」)。
@@ -62,6 +62,8 @@ GPU の仕事はすべて docker の中で動かす (手順では `sudo docker`)
 | 本番 | `build/qad_main.sh` | `capture_moe.py run` (校正 256K + 画像 24 系列、2 GPU で分割) → `qad_l2.py train` (層 0-19 と 20-39 を 2 GPU で) → `qad_l2.py apply` → 評価 → `kl_compare.py` と `zh_teacher_mass.py` で比べる |
 | ds41rt で確認 | `build/ds41rt_eval_l2e.sh`、`build/bench_conc.py`、`build/bench_prefill.py`、`tools/vl_eval.py` | 付属ベンチ、同時 1〜16 本の速度、prefill、画像の正答率、生成の中国語混入 |
 
+| 日本語 OCR の専門家を K3 | `build/ocr_k3.sh`、`tools/vl/build_ocr.py`、`tools/vl/select_k3.py`、`tools/requant_k3.py`、`tools/assemble_k3.py` | 下の「日本語 OCR の専門家を K3 にする」 |
+
 `qad_l2.py apply --mode shards` は、差分のある層の shard だけを実体にコピーして suh/svh のバイト範囲を書き換え、他の shard は hardlink にする。公開パックはこの形 (`v1-l2e-shards`) である。
 `--mode overlay` はハーネス専用で、ds41rt には読ませない。
 
@@ -73,6 +75,20 @@ GPU の仕事はすべて docker の中で動かす (手順では `sudo docker`)
 - トークンの重みは `重要度 × (日本語なら ja_weight) × (画像なら img_weight)`。本番は `--img-weight 1.5`。
 - 画像の検証誤差が v1 より悪くなる expert は採らない (`--img-guard-tol 0`)。本番では 15,360 本のうち 14,582 本を採った (不採用 51、画像ガードで不採用 154、学習用のトークンが 256 未満で v1 のままにしたもの (cold) 573)。
 - 設計の詳細は [`docs/research/QAD_PLAN.md`](../docs/research/QAD_PLAN.md)、全体 KL の L3 の設計は [`harness/qad_l3_design.md`](harness/qad_l3_design.md) (L3 は骨格だけで、公開パックには使っていない)。
+
+### 日本語 OCR の専門家を K3 にする (2026-10-27)
+
+2bit の版は、日本語の文字起こし (CC-OCR 日本語) で温度 0 でも 1.0 でも同じ語を上限まで繰り返すことがあり、元の重みより点が低かった。
+OCR で多く選ばれる routed expert だけを K3 (3bpw) に上げる。
+
+1. `tools/vl/build_ocr.py`: CC-OCR 日本語 150 枚のうち、ほかの評価・校正で使っていない 105 枚を評価 70 / 較正 35 に分ける。
+2. `build/ocr_k3.sh capture`: 元の重みで較正 35 枚を teacher forcing し (`stream_ref_vl.py --teacher-out`)、層ごとに画像トークンと書き起こしのトークンが選んだ専門家を数える。
+3. `select_k3.py`: 層ごとに、画像の選択の割合とテキストの選択の割合を半々で足した値で並べる。上位 32 個/層 (8.3%) で、OCR の画像の選択の 55%、テキストの選択の 68% を覆う。
+4. `requant_k3.py`: 上位の専門家を原本 (MXFP4) から K3 で符号化し直す (v1 と同じ Viterbi + refit、K だけ 3)。重みの相対誤差は K2 (scale 校正後) の 0.263 から 0.132 になる。
+5. `assemble_k3.py`: 元のパックの shard 3〜42 を書き直して K3 の専門家を差し込み、`config.json` の `quantization_config.expert_bits` に `{"<層>.<専門家>": 3}` を書く。
+   1,280 個で 5.3GiB 増える。ds41rt は [`ds41rt-patch`](../ds41rt-patch/README.md) の 0003 が無いと読めない。
+
+K3 の専門家はもとの K2 の scale 校正を引き継がない (原本から作り直す)。
 
 ## データ (公開していないもの)
 
